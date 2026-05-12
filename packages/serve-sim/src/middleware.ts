@@ -250,6 +250,43 @@ function endpoint(base: string, path: string, device: string): string {
   return `${value}?device=${encodeURIComponent(device)}`;
 }
 
+export function previewConfigForState(
+  state: ServeSimState,
+  base: string,
+  serveSimBin: string,
+  execToken: string,
+): ServeSimState & {
+  basePath: string;
+  logsEndpoint: string;
+  appStateEndpoint: string;
+  axEndpoint: string;
+  devtoolsEndpoint: string;
+  serveSimBin: string;
+  gridApiEndpoint: string;
+  gridStartEndpoint: string;
+  gridShutdownEndpoint: string;
+  gridMemoryEndpoint: string;
+  previewEndpoint: string;
+  execToken: string;
+} {
+  const gridApiBase = (base === "" ? "" : base) + "/grid/api";
+  return {
+    ...state,
+    basePath: base,
+    logsEndpoint: endpoint(base, "/logs", state.device),
+    appStateEndpoint: endpoint(base, "/appstate", state.device),
+    axEndpoint: endpoint(base, "/ax", state.device),
+    devtoolsEndpoint: endpoint(base, "/devtools", state.device),
+    serveSimBin,
+    gridApiEndpoint: gridApiBase,
+    gridStartEndpoint: gridApiBase + "/start",
+    gridShutdownEndpoint: gridApiBase + "/shutdown",
+    gridMemoryEndpoint: gridApiBase + "/memory",
+    previewEndpoint: base === "" ? "/" : base,
+    execToken,
+  };
+}
+
 async function isLocalPortFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = createNetServer();
@@ -681,28 +718,7 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
       }
 
       if (state) {
-        // Pass real serve-sim URLs directly. The client parses the MJPEG
-        // stream via fetch() (CORS is fine — serve-sim sends Access-Control-Allow-Origin: *)
-        // and connects to the WS directly (WS has no CORS).
-        const gridApiBase = (base === "" ? "" : base) + "/grid/api";
-        const config = JSON.stringify({
-          ...state,
-          basePath: base,
-          logsEndpoint: endpoint(base, "/logs", state.device),
-          appStateEndpoint: endpoint(base, "/appstate", state.device),
-          axEndpoint: endpoint(base, "/ax", state.device),
-          devtoolsEndpoint: endpoint(base, "/devtools", state.device),
-          // Forward the absolute path of the running serve-sim entry script
-          // so the in-page Camera tool can shell out via `node <bin> camera`
-          // without depending on `serve-sim` being on PATH.
-          serveSimBin: serveSimBinPath(),
-          gridApiEndpoint: gridApiBase,
-          gridStartEndpoint: gridApiBase + "/start",
-          gridShutdownEndpoint: gridApiBase + "/shutdown",
-          gridMemoryEndpoint: gridApiBase + "/memory",
-          previewEndpoint: base === "" ? "/" : base,
-          execToken,
-        });
+        const config = JSON.stringify(previewConfigForState(state, base, serveSimBinPath(), execToken));
         const configScript = `<script>window.__SIM_PREVIEW__=${config}</script>`;
         html = html.replace("<!--__SIM_PREVIEW_CONFIG__-->", configScript);
       }
@@ -974,7 +990,7 @@ export function simMiddleware(options?: SimMiddlewareOptions) {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
       });
-      res.end(JSON.stringify(state || null));
+      res.end(JSON.stringify(state ? previewConfigForState(state, base, serveSimBinPath(), execToken) : null));
       return;
     }
 
