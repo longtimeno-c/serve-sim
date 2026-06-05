@@ -1,11 +1,6 @@
-name: Publish beta to npm
+name: Publish stable to npm
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "packages/**"
-      - ".github/workflows/publish.yml"
   workflow_dispatch: {}
 
 permissions:
@@ -24,58 +19,40 @@ jobs:
       - name: Client tests
         run: bun test packages/serve-sim-client/src/__tests__/
 
-  publish-beta:
+  publish-stable:
     if: github.repository == 'EvanBacon/serve-sim' && github.ref == 'refs/heads/main'
     needs: [test]
     runs-on: macos-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
-          persist-credentials: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Detect serve-sim changes
-        id: changes
+      - name: Require main branch
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "sim=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Publish beta if serve-sim source changed.
-          CHANGED=$(git diff --name-only HEAD~1 HEAD)
-          SOURCE_CHANGED=false
-          if echo "$CHANGED" | grep -q "^packages/serve-sim/"; then
-            SOURCE_CHANGED=true
-          fi
-
-          if [ "$SOURCE_CHANGED" = "true" ]; then
-            echo "sim=true" >> $GITHUB_OUTPUT
-          else
-            echo "sim=false" >> $GITHUB_OUTPUT
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Stable publishes must run from main."
+            exit 1
           fi
 
       - name: Setup bun
-        if: steps.changes.outputs.sim == 'true'
         uses: oven-sh/setup-bun@v2
 
       - name: Setup Node.js
-        if: steps.changes.outputs.sim == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
-        if: steps.changes.outputs.sim == 'true'
         run: bun install --frozen-lockfile
 
       - name: Boot iOS simulator for serve-sim tests
-        if: steps.changes.outputs.sim == 'true'
         id: boot-sim
         run: |
           # Pick the newest available iOS simulator device. The runner image
@@ -117,7 +94,6 @@ jobs:
           echo "udid=$UDID" >> $GITHUB_OUTPUT
 
       - name: serve-sim tests (idle floor regression)
-        if: steps.changes.outputs.sim == 'true'
         run: bun test packages/serve-sim/src/__tests__/
 
       - name: Shutdown simulator
@@ -125,16 +101,14 @@ jobs:
         run: |
           xcrun simctl shutdown "${{ steps.boot-sim.outputs.udid }}" || true
 
-      - name: Build and publish serve-sim beta
-        if: steps.changes.outputs.sim == 'true'
+      - name: Build and publish serve-sim stable
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd packages/serve-sim
 
-          # Publish a unique prerelease from max(local, npm latest) + 1.
-          # This keeps automatic main pushes on npm's beta tag until stable
-          # promotion is requested explicitly.
+          # Stable publishing is manual-only. Bump from max(local, npm latest)
+          # + 1, publish to npm's latest tag, then commit that stable version.
           LOCAL=$(node -p "require('./package.json').version")
           PUBLISHED=$(npm view serve-sim dist-tags.latest 2>/dev/null || echo "")
           [ -z "$PUBLISHED" ] && PUBLISHED="$LOCAL"
@@ -143,9 +117,9 @@ jobs:
             const b='$PUBLISHED'.split('.').map(Number);
             const max=(a[0]>b[0]||(a[0]===b[0]&&a[1]>b[1])||(a[0]===b[0]&&a[1]===b[1]&&a[2]>b[2]))?a:b;
             max[2]++;
-            console.log(max.join('.') + '-beta.${{ github.run_number }}.${{ github.run_attempt }}');
+            console.log(max.join('.'));
           ")
-          echo "Bumped serve-sim: local=$LOCAL npm=$PUBLISHED -> $NEW"
+          echo "Bumped serve-sim stable: local=$LOCAL npm=$PUBLISHED -> $NEW"
           node -e "
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('package.json'));
@@ -156,4 +130,22 @@ jobs:
           bun run build:swift
           bun run build
 
-          npm publish --access public --tag beta --provenance
+          npm publish --access public --tag latest --provenance
+
+      - name: Configure git and commit stable version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/serve-sim/package.json
+          if git diff --cached --quiet; then
+            echo "No version bump to commit"
+          else
+            git commit -m "chore: bump serve-sim version [skip ci]"
+            for i in 1 2 3; do
+              if git push; then exit 0; fi
+              echo "Push rejected (attempt $i/3), rebasing on origin/main..."
+              git pull --rebase --autostash origin main || break
+            done
+            echo "::error::Failed to push serve-sim version bump after 3 attempts. npm has been advanced; next run will self-heal."
+            exit 1
+          fi
