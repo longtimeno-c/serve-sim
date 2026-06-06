@@ -140,11 +140,20 @@ function proxyMjpeg(res: ServerResponse, session: WdaSession): void {
 
 function handleInput(req: IncomingMessage, res: ServerResponse, session: WdaSession): void {
   let raw = "";
+  let tooLarge = false;
   req.on("data", (chunk) => {
+    if (tooLarge) return;
     raw += chunk;
-    if (raw.length > 4096) req.destroy(); // pointer payloads are tiny
+    if (raw.length > 4096) {
+      // Pointer payloads are tiny; reject anything larger with a clear 413
+      // before tearing down so the client gets a response, not a reset.
+      tooLarge = true;
+      json(res, 413, { error: "payload_too_large" });
+      req.destroy();
+    }
   });
   req.on("end", () => {
+    if (tooLarge) return;
     let body: PointerEventBody;
     try {
       body = JSON.parse(raw) as PointerEventBody;
