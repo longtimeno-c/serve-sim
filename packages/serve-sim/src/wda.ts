@@ -27,7 +27,7 @@
  * attempt a build when a team id is resolvable, otherwise we print the exact
  * command to run.
  */
-import { spawn, execFile, execFileSync, type ChildProcess } from "child_process";
+import { spawn, execFileSync, type ChildProcess } from "child_process";
 import { existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";

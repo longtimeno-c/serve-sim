@@ -20,7 +20,7 @@
  * doesn't move becomes a tap; a press that moves becomes a drag (so swipes and
  * scrolls work).
  */
-import { createServer, type IncomingMessage, type ServerResponse, type Server } from "http";
+import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { get as httpGet } from "http";
 import { debugDevice } from "./debug";
 import type { WdaSession } from "./wda";
